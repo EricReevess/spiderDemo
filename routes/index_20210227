@@ -1,0 +1,228 @@
+let express = require('express')
+let router = express.Router()
+let json = require('jsonify')
+// 引入所需要的第三方包
+let superagent = require('superagent')
+require('superagent-charset')(superagent)
+//superagent.buffer[mime] = false
+// 引入所需要的第三方包
+let cheerio = require('cheerio')
+let Queue = require('./Queue')
+let hotNews = []                                // 热点新闻
+let newsData = []
+const requestQueue = new Queue({ delay: 0, timeout: 3000 }) // 请求队列
+
+/* GET home page. */
+router.get('/', function (req, res, next) {
+  superagent
+    .get('https://i.news.qq.com/trpc.qqnews_web.kv_srv.kv_srv_http_proxy/list')
+    .charset('utf-8')
+    .query({
+      sub_srv_id: '24hours',
+      srv_id: 'pc',
+      offset: '0',
+      limit: '20',
+      strategy: '1',
+      ext: '{"pool":["high","top"],"is_filter":10,"check_type":true}'
+
+    })
+    .then((res, err) => {
+      if (err) {
+        // 如果访问失败或者出错，会这行这里
+        console.log(`热点新闻抓取失败 - ${err}`)
+      } else {
+        // 抓取热点新闻数据
+        console.log(res.type)
+        let newsObj // 展示存储JSON的对象
+        newsObj = JSON.parse(res.text)
+        if (newsObj['msg'] && newsObj['msg'] === 'success') {
+          hotNews.push(...newsObj['data']['list'])
+        }
+
+        hotNews.forEach((item, idx) => {
+          newsData.push({
+            id: item.cms_id,
+            title: item.title,
+            url:`https://new.qq.com/rain/a/${item.cms_id}.html`,
+            category: item.category_cn,
+            tags: getTags(item.tags),
+            media: item.media_name,
+            publish_time: item.publish_time,
+            article_type: item.article_type
+          })
+
+        })
+
+        for (let i = 0; i < newsData.length; i++) {
+          //任务1：请求新闻信息接口
+          requestQueue.add(() => new Promise((resolve, reject) => {
+            superagent
+              .get(newsData[i]['url'])
+              .charset('utf-8')
+              .then((res, err) => {
+                if (err) {
+                  resolve('抓取失败')
+                  console.log(`url${i}内容抓取失败 - ${err}`)
+                } else {
+                  const newsContentArray = []
+                  let newsContent
+                  let $ = cheerio.load(res.text)
+                  newsContent = $('.qq_conent .content-article .one-p')
+                  if (newsData[i]['article_type'] || !newsContent.length) { // 如果文章类型不为0，可能是重定向url的专题页面
+                    console.log('进入到专题类型新闻页面解析')
+                    requestQueue.add(() => new Promise((resolve, reject) => {
+                      let newsPageId = newsData[i]['id']
+                      // 查看是否为多个新闻列表的专题页面
+                      console.log('向查询接口发送请求，判断是否为多个列表的专题新闻页面')
+                      superagent
+                        .get('https://pacaio.match.qq.com/openapi/getQQNewsSpecialListItems')
+                        .query({
+                          id: newsPageId,
+                        })
+                        .then((res, err) => {
+                          if (err) {
+                            console.log(`内容抓取失败 - ${err}`)
+                          } else {
+                            console.log('开始解析接口数据')
+                            const specialNewsObjArray = []
+                            const specialNewsTempObjArray = []
+                            newsObj = json.parse(res.text)
+                            newsObj['data']['idlist'] && Array.from(newsObj['data']['idlist']).forEach(item => {
+                              item['newslist'].forEach(item => {
+                                // 如果item有source信息，执行录入
+                                item['source'] && specialNewsTempObjArray.push({
+                                  id: item.id,
+                                  title: item.title,
+                                  url: `https://new.qq.com/omn/${item.id.slice(0, 8)}/${item.id}.html`,
+                                  backup_url:`https://new.qq.com/rain/a/${item.id}.html`,
+                                  media: item.source,
+                                  publish_time: item.time,
+                                  article_type: item.articletype,
+                                  category: '',
+                                  tags: []
+                                })
+
+                              })
+                            })
+
+                            console.log(specialNewsTempObjArray)
+
+                            //如果向接口请求的json对象中，没有任何新闻ID，则目标url为单页专题新闻
+                            if (!specialNewsTempObjArray.length) {
+                              console.log('没有查询到多个id，尝试解析单页专题新闻页面')
+                              requestQueue.add(() => new Promise((resolve, reject) => {
+                                superagent
+                                  .get(`https://new.qq.com/rain/a/${newsPageId}`)
+                                  .then((res, err) => {
+                                    if (err) {
+                                      console.log(`热点内容抓取失败: ${err}`)
+                                    } else {
+                                      console.log('开始解析单页专题新闻页面')
+                                      let $ = cheerio.load(res.text)
+                                      let newsContent = $('.qq_conent .content-article .one-p')
+                                      if (newsContent.length) {
+                                        handleNewsContent(newsContent, newsContentArray, $, i)
+                                        resolve('单页专题新闻抓取成功')
+                                      }
+                                    }
+                                  })
+                              }))
+                            } else {
+                              // 否则开始解析新闻id数组中的内容
+                              /*specialNewsTempObjArray.forEach((elem,idx,array) => {
+                                elem['url'] && requestQueue.add( () =>
+                                  new Promise((resolve, reject) => {
+                                    superagent
+                                      .get(elem['url'])
+                                      .charset('gbk')
+                                      .then((res, err) => {
+                                        if (err) {
+                                          console.log(`内容抓取失败 - ${err}`)
+                                        } else {
+                                          const newsContentArray = []
+                                          let newsContent
+                                          let $ = cheerio.load(res.text)
+                                          newsContent = $('.qq_conent .content-article .one-p')
+                                        }
+                                      })
+                                  })
+                                )
+                              })*/
+                            }
+                          }
+                        })
+                    }).then(result => {
+                      console.log(result)
+                    }))
+                  } else {
+                    handleNewsContent(newsContent, newsContentArray, $, i)
+                    resolve('普通页面新闻抓取成功')
+                  }
+                }
+              })
+          })
+            .then(result => {
+              console.log(result)
+            }))
+            .then(() => {
+
+            })
+        }
+
+        /*setTimeout(() => {
+          console.log(newsTitle)
+        },20000)*/
+
+        /*hotNew = getHotNews(res)
+        hotNew.forEach(function(item) {
+          console.log(item.title);
+          console.log(item.href);
+        });*/
+      }
+    })
+
+
+  /*let timer = setInterval(() => {
+    console.log(requestQueue)
+  },1000)
+  setTimeout(() => {
+    res.send({
+      status:0,
+      msg:newsTitle
+    })
+  },5000)*/
+
+})
+
+
+const getTags = (tagsArray) => {
+  const tags = []
+  if (tagsArray.length) {
+    tagsArray.forEach(item => {
+      tags.push(item.tag_word)
+    })
+  }
+  return tags
+}
+
+const getKeywords = ($) => {
+  return $ ? $('meta[name=keywords]').attr('content') : ''
+}
+
+function handleNewsContent (newsContent, newsContentArray, $, i) {
+  newsContent.each((idx, ele) => {
+    newsContentArray.push($(ele).text())
+  })
+  newsData[i]['newsContentArray'] = newsContentArray.slice(0)
+  newsData[i]['keywords'] = getKeywords($)
+  console.log('新闻id：', newsData[i]['id'])
+  console.log('新闻url：', newsData[i]['url'])
+  //console.log('备用url：', newsData[i]['backup_url'])
+  console.log('新闻类型：', newsData[i]['article_type'])
+  console.log('新闻标题：', newsData[i]['title'])
+  console.log('新闻关键词：', newsData[i]['keywords'])
+  console.log('新闻内容：', newsData[i]['newsContentArray'])
+}
+
+
+module.exports = router
