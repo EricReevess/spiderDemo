@@ -10,7 +10,7 @@ class TaskQueue {
         //任务未超时，则会进入这里
         resolve(data);
         this.resolved = true;//标记任务完成
-        console.log('任务完成')
+        console.log('任务完成，剩余任务：', this.getRemainingTaskCount())
         clearTimeout(this.timer);//清除超时计时器
         this.timer = null;
         if (this.executeNext) {//true代表任务是在delay后完成的，所以直接执行下一个任务
@@ -67,6 +67,11 @@ class TaskQueue {
   // 返回当前队列是否有任务正在处理
   isRunningTask () {
     return !this.resolved
+  }
+  clearRemainingTask () {
+    let remainingTaskArray = this.waitingQueue.slice(0)
+    this.waitingQueue = []
+    return remainingTaskArray
   }
 }
 

@@ -10,7 +10,7 @@ let TaskQueue = require('./TaskQueue')
 let hotNews = []                                // 热点新闻
 let newsData = []
 let specialNewsTempObjArray = []
-let respTimer
+let responseTimer
 const requestTaskQueue = new TaskQueue({ delay: 0, timeout: 3000 }) // 请求队列
 
 /*
@@ -36,8 +36,8 @@ router.get('/', function (req, res, next) {
     .query({
       sub_srv_id: '24hours',  // 新闻类型
       srv_id: 'pc', //网页客户端平台
-      offset: '0', // 位移
-      limit: '2', // 每次抓取的数量限制
+      offset: '10', // 位移
+      limit: '10', // 每次抓取的数量限制
       strategy: '1', ext: '{"pool":["high","top"],"is_filter":10,"check_type":true}'
 
     })
@@ -47,11 +47,10 @@ router.get('/', function (req, res, next) {
         console.log(`热点新闻抓取失败 - ${err}`)
       } else {
         // 抓取热点新闻数据
-        console.log(res.type)
         let newsObj // 展示存储JSON的对象
         newsObj = JSON.parse(res.text)
         if (newsObj['msg'] && newsObj['msg'] === 'success') {
-          hotNews.push(...newsObj['data']['list'])
+          hotNews = newsObj['data']['list'].slice(0)
         }
 
         hotNews.forEach((item, idx) => {
@@ -130,28 +129,36 @@ router.get('/', function (req, res, next) {
                                       } else {
                                         console.log('开始解析专题新闻子页面')
                                         let $ = cheerio.load(res.text)
-                                        // 匹配到script标签中的信息字段
-                                        let regExp = /(DATA = {)([\w\W]*?)}/g
-                                        let matchResult = res.text.match(regExp)[0]
-                                        let scriptInfo = matchResult ? matchResult.slice(7) : '{}'
-                                        let scriptInfoObj = JSON.parse(scriptInfo)
                                         let newsContent = $('.qq_conent .content-article .one-p')
-                                        array[idx]['tags'] = scriptInfoObj['tags'].split(',') // 提出标签
-                                        handleNewsContent(array, newsContent, newsContentArray, $, idx)
-                                        newsContentArray = []
-                                        resolve('专题子页面新闻抓取成功')
+                                        if (newsContent.length) {
+                                          let regExp = /(DATA = {)([\w\W]*?)}/g
+                                          // 匹配到script标签中的信息字段
+                                          let matchResult = res.text.match(regExp)
+                                          let scriptInfo = matchResult ? matchResult[0].slice(7) : '{}'
+                                          let scriptInfoObj = JSON.parse(scriptInfo)
+                                          array[idx]['tags'] = scriptInfoObj['tags'].split(',') // 提出标签
+                                          handleNewsContent(array, newsContent, newsContentArray, $, idx)
+                                          newsContentArray = []
+                                          resolve('专题子页面新闻抓取成功')
+                                        }
                                       }
-                                    })
+                                    }).catch(reason => {
+                                    console.log(reason)
+                                  })
+                                }).then(result => {
+                                  console.log(result)
                                 }))
                               })
-                              // 如果该新闻是专题新闻，将专题新闻信息数组放入专门的属性中
-                              newsData[i]['specialNewsArray'] = specialNewsTempObjArray.slice(0)
+                              newsData.splice(i, 1, ...specialNewsTempObjArray.slice(0))
+                              //newsData[i]['specialNewsArray'] = specialNewsTempObjArray.slice(0)
                               specialNewsTempObjArray = []
                             }
                           }
                         })
                     }).then(result => {
                       console.log(result)
+                    }).catch(reason => {
+                      console.log(reason)
                     }))
                   } else {
                     //console.log(JSON.parse(res.text.match(/(DATA = {)([\w\W]*?)}/g)[0].slice(7)) ) //添加问号为惰性匹配
@@ -168,35 +175,19 @@ router.get('/', function (req, res, next) {
 
             })
         }
-
-        /*hotNew = getHotNews(res)
-        hotNew.forEach(function(item) {
-          console.log(item.title);
-          console.log(item.href);
-        });*/
       }
     })
 
 
-  /*let timer = setInterval(() => {
-    console.log(requestTaskQueue)
-  },1000)
-  setTimeout(() => {
-    res.send({
-      status:0,
-      msg:newsTitle
-    })
-  },5000)*/
-
-  respTimer = setInterval(() => {
+  responseTimer = setInterval(() => {
     if (requestTaskQueue.isEmpty()) {
       console.log('爬取完毕，将数据响应给浏览器')
       //console.log(newsData)
       res.json({
         status: 0, data: newsData,
       })
-      clearInterval(respTimer)
-      respTimer = null
+      clearInterval(responseTimer)
+      responseTimer = null
     }
     /*console.log('任务剩余个数',requestTaskQueue.getRemainingTaskCount())
     console.log('是否在执行',requestTaskQueue.isRunningTask())*/
@@ -204,10 +195,9 @@ router.get('/', function (req, res, next) {
 
 })
 
-router.get('/getQueueStatus', ((req, res,next) => {
+router.get('/getQueueStatus', ((req, res, next) => {
   res.json({
-    isRunning:requestTaskQueue.isRunningTask(),
-    RemainingTasksCount:requestTaskQueue.getRemainingTaskCount(),
+    isRunning: requestTaskQueue.isRunningTask(), RemainingTasksCount: requestTaskQueue.getRemainingTaskCount(),
   })
 }))
 
@@ -246,5 +236,9 @@ function handleNewsContent (newsData, newsContent, newsContentArray, $, i) {
   console.log('新闻内容：', newsData[i]['newsContentArray'])*/
 }
 
+function keywordFilter(keyword,newsData){
 
+}
+
+// 模糊匹配[\u4e00-\u9fa5a-zA-Z0-9]*keyword[\u4e00-\u9fa5a-zA-Z0-9]*
 module.exports = router
